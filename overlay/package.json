@@ -1,0 +1,34 @@
+{
+  "name": "meeting-copilot-overlay",
+  "version": "1.0.0",
+  "description": "Meeting Copilot - floating overlay for real-time suggestions",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "echo 'Not built yet - dev overlay only'",
+    "pack": "electron-builder"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^34.0.0",
+    "electron-builder": "^24.13.3",
+    "ws": "^8.21.0"
+  },
+  "build": {
+    "appId": "com.meetingcoppilot.overlay",
+    "productName": "Meeting Copilot Overlay",
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

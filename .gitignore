@@ -1,0 +1,28 @@
+# secrets
+.env
+*.key
+.env.example
+# python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# node
+node_modules/
+dist/
+build/
+
+# local data - never commit client documents, transcripts, or vector indexes
+backend/data/
+backend/uploads/
+backend/vector_index/
+*.faiss
+transcripts/
+*.log
+chroma/
+*.sqlite3
+backend/backend/
+backend/%LOCALAPPDATA%/
+ingest_error*.txt
+test_docs/test_docs/

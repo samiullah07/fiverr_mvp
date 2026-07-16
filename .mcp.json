@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "sequential-thinking": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
+      "_comment": "Optional. Helps with the trickiest bit of this project - the question-detection + retrieval + latency-budget reasoning in Phase 2/3. Enable if planning that logic feels like it needs more structured step-by-step reasoning than plan mode alone gives you. Remove this entry if you don't want it."
+    },
+    "memory": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"],
+      "_comment": "Optional. A simple local knowledge-graph memory server, useful if you want Claude to remember architecture decisions across many separate Claude Code sessions over the 14-21 day build without re-reading all of docs/ every time. Not required - CLAUDE.md + docs/ already cover this for most sessions."
+    }
+  }
+}

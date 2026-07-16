@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Meeting Copilot</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      width: 400px;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: rgba(0, 0, 0, 0.9);
+      color: #e0e0e0;
+      overflow: hidden;
+      -webkit-app-region: drag;
+    }
+
+    .title-bar {
+      display: flex;
+      align-items: center;
+      padding: 8px 12px;
+      background: rgba(0, 0, 0, 0.85);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+      -webkit-app-region: drag;
+    }
+
+    .title {
+      font-size: 14px;
+      font-weight: 600;
+      color: #fff;
+    }
+
+    .indicator {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 12px;
+      -webkit-app-region: non-drag;
+    }
+
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #4CAF50;
+      animation: pulse 1.5s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .status-text {
+      font-size: 12px;
+      color: #4CAF50;
+    }
+
+    .suggestion {
+      padding: 12px;
+      min-height: 60px;
+      background: rgba(255, 255, 255, 0.05);
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+      overflow-y: auto;
+    }
+
+    .suggestion-text {
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
+    .citation {
+      font-size: 11px;
+      color: #888;
+      margin-top: 4px;
+    }
+
+    .not-found {
+      padding: 12px;
+      background: rgba(255, 193, 7, 0.1);
+      border-left: 3px solid #ffc107;
+      color: #ffc107;
+      font-style: italic;
+    }
+
+    .not-found strong {
+      color: #fff;
+    }
+
+    .close-btn {
+      -webkit-app-region: non-drag;
+      width: 20px;
+      height: 20px;
+      background: none;
+      border: none;
+      color: #888;
+      cursor: pointer;
+      font-size: 16px;
+      line-height: 18px;
+      text-align: center;
+      border-radius: 50%;
+      transition: background 0.2s;
+    }
+
+    .close-btn:hover {
+      background: rgba(255, 255, 255, 0.1);
+    }
+  </style>
+</head>
+<body>
+  <div class="title-bar">
+    <span class="title">Meeting Copilot</span>
+    <button class="close-btn" id="closeBtn">×</button>
+  </div>
+
+  <div class="indicator">
+    <span class="status-dot"></span>
+    <span class="status-text">Transcription active</span>
+  </div>
+
+  <div id="suggestionContainer" class="suggestion">
+    <div class="suggestion-text" id="suggestionText">
+      <div id="transcript" class="transcript-box">
+        <span>Listening...</span>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Close button handler
+    const closeBtn = document.getElementById('closeBtn');
+    closeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      window.electronAPI?.closeWindow?.();
+    });
+
+    // Helper to render transcript lines
+    const transcriptBox = document.getElementById('transcript');
+    const suggestionText = document.getElementById('suggestionText');
+
+    // Listen for incoming WebSocket messages from the preload script
+    if (window.electronAPI?.onWsMessage) {
+      window.electronAPI.onWsMessage('transcript-update', ({text}) => {
+        // Live transcript – just inject the new text (append or replace as needed)
+        transcriptBox.innerHTML = text || '<span>Listening...</span>';
+      });
+
+      window.electronAPI.onWsMessage('suggestion-token', ({fragment}) => {
+        // Append token to the suggestion area
+        const fragmentNode = document.createTextNode(fragment);
+        suggestionText.appendChild(fragmentNode);
+      });
+
+      window.electronAPI.onWsMessage('suggestion-done', ({text, citations}) => {
+        // Replace placeholder with final answer
+        suggestionText.innerHTML = text;
+
+        // Append citations if they exist
+        if (citations && citations.length) {
+          const citationContainer = document.createElement('div');
+          citationContainer.className = 'citation';
+          citations.forEach(c => {
+            const citationSpan = document.createElement('span');
+            citationSpan.textContent = `[${c.filename} ${c.section}]`;
+            citationContainer.appendChild(citationSpan);
+          });
+          // Insert citations after the main text
+          const lastChild = suggestionText.lastElementChild;
+          if (lastChild) {
+            suggestionText.insertBefore(citationContainer, lastChild);
+          } else {
+            suggestionText.appendChild(citationContainer);
+          }
+        }
+
+        // Ensure the not‑found styling is removed (in case we displayed it before)
+        suggestionText.parentElement.classList.remove('not-found');
+      });
+
+      window.electronAPI.onWsMessage('no-relevant-documents', ({query}) => {
+        // Show distinct "not in your documents" visual state
+        suggestionText.innerHTML = `<strong>Not in your documents</strong>: ${query}`;
+        suggestionText.parentElement.classList.add('not-found');
+      });
+
+      window.electronAPI.onWsMessage('error', ({message}) => {
+        // Simple error display – could be enhanced later
+        suggestionText.innerHTML = `<strong>Error:</strong> ${message}`;
+        suggestionText.parentElement.classList.remove('not-found');
+      });
+    } else {
+      console.warn('[Meeting Copilot] electronAPI.onWsMessage not available');
+    }
+  </script>
+</body>
+</html>
