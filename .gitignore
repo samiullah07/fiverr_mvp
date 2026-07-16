@@ -26,3 +26,5 @@ backend/backend/
 backend/%LOCALAPPDATA%/
 ingest_error*.txt
 test_docs/test_docs/
+.claude
+CLAUDE.md
