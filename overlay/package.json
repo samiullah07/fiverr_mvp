@@ -4,8 +4,8 @@
   "description": "Meeting Copilot - floating overlay for real-time suggestions",
   "main": "main.js",
   "scripts": {
-    "start": "electron .",
-    "build": "echo 'Not built yet - dev overlay only'",
+    "start": "node api.js && electron .",
+    "build": "node api.js && echo 'Not built yet - dev overlay only'",
     "pack": "electron-builder"
   },
   "keywords": [],
