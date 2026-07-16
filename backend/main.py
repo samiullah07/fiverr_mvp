@@ -21,6 +21,8 @@ Architecture:
                     │       - final answer → suggestion-done WS message  │
                     └─────────────────────────────────────────────────────┘
 """
+import utils.transport
+import utils.session
 import asyncio
 import json
 import os
