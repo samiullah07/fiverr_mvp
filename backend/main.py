@@ -25,11 +25,17 @@ import asyncio
 import json
 import os
 import re
+import sys
 import threading
+from pathlib import Path
 from collections import deque
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple
+
+# Load environment variables from .env file
+from dotenv import load_dotenv
+load_dotenv()
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.websockets import WebSocketState
@@ -40,8 +46,9 @@ import uvicorn
 # ============================================================================
 from backend.audio.capture import AudioManager
 from backend.audio.transcription import WhisperTranscriber
-from backend.rag.retrieval import Retriever, RetrievalResult
-from backend.rag.llm import LLMClient, SYSTEM_INSTRUCTIONS, GROUNDING_TEMPLATE
+from backend.rag.retrieval import Retriever
+from backend.rag.llm import LLMClient, GROUNDING_TEMPLATE
+from backend.rag.ingestion import DocumentIngester, IngestionResult
 
 # ============================================================================
 # Thread-safe message queue (sync → async bridge)
@@ -212,6 +219,7 @@ class OrchestrationState:
     question_detector: Optional[QuestionDetector] = None
     transcript_buffer: Optional[TranscriptBuffer] = None
     executor: Optional[Any] = None  # ThreadPoolExecutor for RAG+LLM
+    docs_folder: Optional[str] = None
     running: bool = False
 
 
@@ -221,6 +229,44 @@ orch_state = OrchestrationState()
 # ============================================================================
 # Callback handlers (called from sync threads — must be non-blocking)
 # ============================================================================
+# ============================================================================
+# Whisper hallucination / silence-filler filtering
+# ============================================================================
+_FILLER_BLOCKLIST = {
+    "okay", "alright", "thank you", "thanks for watching", "bye", "you",
+    "mm-hmm", "got it", "great", "good",
+}
+
+
+def _normalize_chunk(text: str) -> str:
+    """Lowercase and strip punctuation/whitespace for whole-chunk comparison."""
+    return re.sub(r"[^\w\s]", "", text).strip().lower()
+
+
+def _is_repetitive(text: str, threshold: float = 0.7) -> bool:
+    """True if >`threshold` of the words are duplicates (low unique-word ratio)."""
+    words = _normalize_chunk(text).split()
+    if len(words) < 2:
+        return False
+    unique_ratio = len(set(words)) / len(words)
+    return unique_ratio < (1.0 - threshold)
+
+
+def _is_filler_chunk(text: str) -> bool:
+    """Drop Whisper silence-hallucinations before they enter the buffer."""
+    norm = _normalize_chunk(text)
+    # Always drop very short chunks regardless of blocklist
+    if len(norm) < 15:
+        return True
+    # Exact-match the whole (normalized) chunk against known filler phrases
+    if norm in _FILLER_BLOCKLIST:
+        return True
+    # Drop chunks that are mostly repeated words
+    if _is_repetitive(text):
+        return True
+    return False
+
+
 def on_transcript(text: str, latency: float):
     """
     Called by WhisperTranscriber for each transcribed chunk.
@@ -228,6 +274,11 @@ def on_transcript(text: str, latency: float):
     """
     import time
     timestamp = time.time()
+
+    # 0. Filter Whisper hallucinations / silence filler BEFORE buffering
+    if _is_filler_chunk(text):
+        print(f"[DEBUG] discarded filler/short chunk: {text!r}", flush=True)
+        return
 
     # 1. Add to rolling buffer
     if orch_state.transcript_buffer:
@@ -253,7 +304,11 @@ def on_transcript(text: str, latency: float):
 
 def process_question_async(question: str):
     """
-    Runs in thread pool: retrieve → build prompt → stream LLM.
+    Runs in thread pool: extract question -> retrieve -> build prompt -> stream LLM.
+
+    `question` here is whatever triggered the run: the raw recent transcript
+    buffer (hotkey) or a detected sentence (auto-detect). We do NOT retrieve on
+    that raw text — first ask the LLM to extract the actual question.
     """
     import time
     start = time.time()
@@ -261,10 +316,37 @@ def process_question_async(question: str):
     if not orch_state.retriever or not orch_state.llm_client:
         return
 
-    # 1. Retrieve relevant chunks
+    # 1. Extract the actual question from the raw transcript via a fast LLM call.
+    #    No system prompt — the grounding instructions would be wrong here.
+    extract_prompt = (
+        "Here is a recent meeting transcript. What question is being asked "
+        "of the presenter? Reply with only the question, or exactly NONE if "
+        "there is no clear question.\n\n"
+        f"Transcript:\n{question}"
+    )
+    try:
+        extracted = orch_state.llm_client.complete(extract_prompt, max_tokens=50)
+    except Exception as e:
+        print(f"[BENCH] question_e2e=error | error=extraction | {e}", flush=True)
+        enqueue_message({"type": "error", "message": f"Question extraction failed: {e}"})
+        return
+
+    extracted = (extracted or "").strip()
+    print(f"[BENCH] extracted_question={extracted!r}", flush=True)
+
+    # 2. Handle the NONE case: no clear question -> do NOT retrieve or answer.
+    if extracted.upper() == "NONE":
+        print(f"[BENCH] question_e2e=no-question | suggestion_produced=False", flush=True)
+        enqueue_message({
+            "type": "no-question-detected",
+            "message": "No clear question detected in the recent conversation — try speaking your question and pressing again.",
+        })
+        return
+
+    # 3. Retrieve relevant chunks using the EXTRACTED question (not raw buffer)
     retrieve_start = time.time()
     try:
-        results = orch_state.retriever.retrieve(question, n_results=5)
+        results = orch_state.retriever.retrieve(extracted, n_results=5)
     except Exception as e:
         retrieve_time = time.time() - retrieve_start
         print(f"[BENCH] question_e2e=error | retrieve={retrieve_time:.2f}s | error=retrieval", flush=True)
@@ -274,10 +356,10 @@ def process_question_async(question: str):
 
     if not results:
         print(f"[BENCH] question_e2e=error | retrieve={retrieve_time:.2f}s | suggestion_produced=False | n_results=0", flush=True)
-        enqueue_message({"type": "no-relevant-documents", "query": question})
+        enqueue_message({"type": "no-relevant-documents", "query": extracted})
         return
 
-    # 2. Build grounded prompt
+    # 4. Build grounded prompt
     context_lines = []
     citations = []
     for i, r in enumerate(results, 1):
@@ -299,9 +381,9 @@ def process_question_async(question: str):
         })
 
     context = "\n".join(context_lines)
-    prompt = GROUNDING_TEMPLATE.format(context=context, question=question)
+    prompt = GROUNDING_TEMPLATE.format(context=context, question=extracted)
 
-    # 3. Stream LLM answer with callback for each token
+    # 5. Stream LLM answer with callback for each token
     full_answer = []
     llm_first_token_time = None
 
@@ -319,7 +401,7 @@ def process_question_async(question: str):
         print(f"[BENCH] question_e2e=error | suggestion_produced=False | error=llm", flush=True)
         return
 
-    # 4. Send final answer with citations
+    # 6. Send final answer with citations
     enqueue_message({
         "type": "suggestion-done",
         "text": answer,
@@ -345,6 +427,31 @@ async def lifespan(app: FastAPI):
     orch_state.question_detector = QuestionDetector()
     orch_state.transcript_buffer = TranscriptBuffer()
     orch_state.executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+
+    # 1.5 Index documents from docs_folder (RAG setup)
+    if orch_state.docs_folder:
+        docs_path = Path(orch_state.docs_folder)
+        if not docs_path.exists():
+            print(f"[WARN] Documents folder not found: {docs_path}", flush=True)
+        elif not any(docs_path.iterdir()):
+            print(f"[WARN] Documents folder is empty: {docs_path}", flush=True)
+        else:
+            print(f"[DOCS] Indexing documents from: {docs_path}", flush=True)
+            try:
+                ingester = DocumentIngester(docs_path)
+                result = ingester.ingest_folder()
+                if result.status.startswith("error"):
+                    print(f"[WARN] Indexing error: {result.status}", flush=True)
+                else:
+                    print(
+                        f"[OK] Indexed {len(result.processed_files)} file(s), "
+                        f"skipped {len(result.skipped_files)}, "
+                        f"removed {len(result.removed_files)}. "
+                        f"Total chunks: {result.total_chunks}",
+                        flush=True,
+                    )
+            except Exception as e:
+                print(f"[WARN] Document indexing failed: {e}", flush=True)
 
     # 2. Initialize audio pipeline
     # AudioManager with transcription disabled (we handle it ourselves)
@@ -484,4 +591,9 @@ def emit_error(message: str):
 # Entry point
 # ============================================================================
 if __name__ == "__main__":
+    # Read docs folder from positional arg or env var BEFORE uvicorn starts
+    if len(sys.argv) > 1:
+        orch_state.docs_folder = sys.argv[1]
+    else:
+        orch_state.docs_folder = os.getenv("DOCS_FOLDER")
     uvicorn.run(app, host="127.0.0.1", port=8765)

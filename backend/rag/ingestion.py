@@ -29,6 +29,12 @@ except ImportError:
     PDF_SUPPORTED = False
 
 try:
+    import docx  # python-docx for .docx files
+    DOCX_SUPPORTED = True
+except ImportError:
+    DOCX_SUPPORTED = False
+
+try:
     from sentence_transformers import SentenceTransformer
     EMBEDDER_AVAILABLE = True
 except ImportError:
@@ -122,6 +128,8 @@ class DocumentIngester:
         self.chunk_size = chunk_size
         self.overlap = overlap
         self._supported_exts = {".txt", ".md", ".pdf"}
+        if DOCX_SUPPORTED:
+            self._supported_exts.add(".docx")
 
     # --------------------------------------------------------------------- #
     # Public API
@@ -269,6 +277,8 @@ class DocumentIngester:
             return self._extract_pdf_text(path)
         if ext in {".txt", ".md"}:
             return self._extract_plain_text(path)
+        if ext == ".docx":
+            return self._extract_docx_text(path)
         return ""
 
     def _extract_plain_text(self, path: Path) -> str:
@@ -291,4 +301,15 @@ class DocumentIngester:
                         text_parts.append(f"[Page {page_num}]\n{page_text}")
                 except Exception:  # pragma: no cover – defensive
                     continue
+        return "\n\n".join(text_parts)
+
+    def _extract_docx_text(self, path: Path) -> str:
+        if not DOCX_SUPPORTED:
+            raise RuntimeError("DOCX support requires: pip install python-docx")
+        document = docx.Document(str(path))
+        text_parts = []
+        for para in document.paragraphs:
+            text = para.text.strip()
+            if text:
+                text_parts.append(text)
         return "\n\n".join(text_parts)

@@ -64,14 +64,46 @@
     .suggestion {
       padding: 12px;
       min-height: 60px;
-      background: rgba(255, 255, 255, 0.05);
-      border-top: 1px solid rgba(255, 255, 255, 0.1);
+      background: rgba(0, 0, 0, 0.65);
+      border-top: 1px solid rgba(255, 255, 255, 0.2);
+      max-height: 200px;
       overflow-y: auto;
+      overflow-x: hidden;
+      border-radius: 4px;
+      margin: 8px 0;
+      transition: max-height 0.3s ease;
     }
 
     .suggestion-text {
       font-size: 13px;
       line-height: 1.4;
+      word-wrap: break-word;
+      hyphens: auto;
+    }
+
+    /* Custom scrollbar styling for dark theme */
+    .suggestion::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    .suggestion::-webkit-scrollbar-track {
+      background: rgba(0, 0, 0, 0.2);
+      border-radius: 3px;
+    }
+
+    .suggestion::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.3);
+      border-radius: 3px;
+      transition: background 0.2s;
+    }
+
+    .suggestion::-webkit-scrollbar-thumb:hover {
+      background: rgba(255, 255, 255, 0.5);
+    }
+
+    /* Smooth scrolling */
+    html {
+      scroll-behavior: smooth;
     }
 
     .citation {
@@ -89,6 +121,18 @@
     }
 
     .not-found strong {
+      color: #fff;
+    }
+
+    .no-question {
+      padding: 12px;
+      background: rgba(33, 150, 243, 0.15);
+      border-left: 3px solid #2196F3;
+      color: #64B5F6;
+      font-style: italic;
+    }
+
+    .no-question strong {
       color: #fff;
     }
 
@@ -142,6 +186,7 @@
     // Helper to render transcript lines
     const transcriptBox = document.getElementById('transcript');
     const suggestionText = document.getElementById('suggestionText');
+    const suggestionContainer = document.getElementById('suggestionContainer');
 
     // Listen for incoming WebSocket messages from the preload script
     if (window.electronAPI?.onWsMessage) {
@@ -154,21 +199,34 @@
         // Append token to the suggestion area
         const fragmentNode = document.createTextNode(fragment);
         suggestionText.appendChild(fragmentNode);
+        // Auto-scroll to bottom so streaming text stays visible
+        suggestionContainer.scrollTop = suggestionContainer.scrollHeight;
       });
 
       window.electronAPI.onWsMessage('suggestion-done', ({text, citations}) => {
         // Replace placeholder with final answer
         suggestionText.innerHTML = text;
 
-        // Append citations if they exist
+        // Append citations if they exist - deduplicated by filename
         if (citations && citations.length) {
+          // Deduplicate citations by filename
+          const uniqueFiles = new Map();
+          citations.forEach(c => {
+            if (!uniqueFiles.has(c.filename)) {
+              uniqueFiles.set(c.filename, c.section || '');
+            }
+          });
+
           const citationContainer = document.createElement('div');
           citationContainer.className = 'citation';
-          citations.forEach(c => {
+
+          uniqueFiles.forEach((section, filename) => {
             const citationSpan = document.createElement('span');
-            citationSpan.textContent = `[${c.filename} ${c.section}]`;
+            const displayText = section ? `[${filename} ${section}]` : `[${filename}]`;
+            citationSpan.textContent = displayText;
             citationContainer.appendChild(citationSpan);
           });
+
           // Insert citations after the main text
           const lastChild = suggestionText.lastElementChild;
           if (lastChild) {
@@ -178,8 +236,9 @@
           }
         }
 
-        // Ensure the not‑found styling is removed (in case we displayed it before)
+        // Ensure the not‑found / no‑question styling is removed (in case we displayed it before)
         suggestionText.parentElement.classList.remove('not-found');
+        suggestionText.parentElement.classList.remove('no-question');
       });
 
       window.electronAPI.onWsMessage('no-relevant-documents', ({query}) => {
@@ -188,10 +247,17 @@
         suggestionText.parentElement.classList.add('not-found');
       });
 
+      window.electronAPI.onWsMessage('no-question-detected', ({message}) => {
+        // Distinct state: we heard speech but found no clear question to answer
+        suggestionText.innerHTML = `<strong>No question detected</strong><br>${message}`;
+        suggestionText.parentElement.classList.add('no-question');
+      });
+
       window.electronAPI.onWsMessage('error', ({message}) => {
         // Simple error display – could be enhanced later
         suggestionText.innerHTML = `<strong>Error:</strong> ${message}`;
         suggestionText.parentElement.classList.remove('not-found');
+        suggestionText.parentElement.classList.remove('no-question');
       });
     } else {
       console.warn('[Meeting Copilot] electronAPI.onWsMessage not available');

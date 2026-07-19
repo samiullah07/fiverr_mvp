@@ -68,6 +68,38 @@ class LLMClient:
             return self._stream_claude(prompt)
         return self._stream_openai(prompt)
 
+    def complete(self, prompt: str, max_tokens: int = 100, system: Optional[str] = None) -> str:
+        """Non-streaming call that returns the full response text.
+
+        `system` is optional. Pass None (default) for lightweight tasks like
+        question extraction where the grounding system prompt would be wrong.
+        """
+        try:
+            if self.provider == "claude":
+                kwargs = dict(
+                    model=self.model,
+                    max_tokens=max_tokens,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                if system:
+                    kwargs["system"] = system
+                msg = self.client.messages.create(**kwargs)
+                return msg.content[0].text
+            else:  # openai / openrouter
+                messages = []
+                if system:
+                    messages.append({"role": "system", "content": system})
+                messages.append({"role": "user", "content": prompt})
+                resp = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    max_tokens=max_tokens,
+                    stream=False,
+                )
+                return resp.choices[0].message.content
+        except Exception as e:
+            return f"LLM Error: {e}"
+
     def stream_answer_callback(self, prompt: str, on_token: Callable[[str], None]) -> str:
         """Stream the response, calling on_token for each chunk, and return full text."""
         if self.provider == "claude":

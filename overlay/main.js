@@ -98,8 +98,6 @@ function createWindow() {
     const { x, y } = getStoredPosition();
 
     const mainWindow = new BrowserWindow({
-        width: 400,
-        height: 200,
         x: x,
         y: y,
         frame: false,
@@ -107,6 +105,9 @@ function createWindow() {
         skipTaskbar: true,
         focusable: true,
         show: false,
+        resizable: true,
+        width: 600,
+        height: 400,
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
             nodeIntegration: false,
