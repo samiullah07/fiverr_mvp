@@ -42,9 +42,10 @@ let ws = null;
 let reconnectAttempts = 0;
 let reconnectTimer = null;
 const MAX_RECONNECT_DELAY = 30000; // Cap at 30s
+const BACKEND_PORT = process.env.PORT || 8765;
 
 function connectWebSocket() {
-    ws = new WebSocket('ws://127.0.0.1:8765/ws/overlay');
+    ws = new WebSocket(`ws://127.0.0.1:${BACKEND_PORT}/ws/overlay`);
 
     ws.on('open', () => {
         console.log('[overlay] WebSocket connected');
@@ -158,6 +159,11 @@ app.whenReady().then(() => {
     try {
         const registered = globalShortcut.register(assistHotkey, () => {
             console.log('[overlay] Assist Me hotkey pressed');
+            // Tell the renderer to show "Thinking..." immediately, in parallel
+            // with sending the assist request to the backend.
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('assist-start');
+            }
             sendToBackend({ type: 'assist-request' });
         });
         if (!registered) {
