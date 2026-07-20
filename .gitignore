@@ -1,5 +1,4 @@
 # secrets
-.env
 *.key
 .env.example
 # python
@@ -28,3 +27,4 @@ ingest_error*.txt
 test_docs/test_docs/
 .claude
 CLAUDE.md
+config.bat

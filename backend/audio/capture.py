@@ -143,8 +143,11 @@ class AudioManager:
 
     def _downmix_stereo_to_mono(self, audio_bytes: bytes, channels: int) -> bytes:
         """
-        Convert interleaved stereo PCM to mono by averaging channels.
-        Correctly handles interleaved format: LRLRLR...
+        Convert multichannel interleaved PCM to mono.
+
+        For stereo (2 channels): average left + right -> mono.
+        For >2 channels (e.g., 4-mic array): take channel 0 only.
+        Averaging a 4-mic array smears the signal and hurts intelligibility.
 
         Args:
             audio_bytes: Raw audio bytes in interleaved PCM format
@@ -159,12 +162,15 @@ class AudioManager:
         # Convert to numpy array
         audio_array = np.frombuffer(audio_bytes, dtype=np.int16)
 
-        # Reshape interleaved PCM: (-1, channels) then mean across axis=1
-        # For stereo interleaved LRLRLR..., reshape to [[L0,R0], [L1,R1], ...]
+        # Reshape interleaved PCM: (-1, channels) then extract mono
         audio_array = audio_array.reshape((-1, channels))
 
-        # Average across channels (axis=1) to get mono
-        mono_array = np.mean(audio_array, axis=1, dtype=np.int16)
+        if channels > 2:
+            # Multi-channel array (e.g., 4-mic): take channel 0 only.
+            mono_array = audio_array[:, 0]
+        else:
+            # Stereo: average both channels
+            mono_array = np.mean(audio_array, axis=1, dtype=np.int16)
 
         return mono_array.tobytes()
 
