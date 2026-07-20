@@ -206,6 +206,12 @@ class TranscriptBuffer:
                 return text.strip()
         return text.strip()
 
+    def clear(self) -> None:
+        """Empty the buffer — used after a question is processed so the next
+        hotkey press starts from fresh speech only (prevents re-answering the
+        previous question)."""
+        self._buffer.clear()
+
 
 # ============================================================================
 # Orchestration state (global, accessed from lifespan + callbacks)
@@ -254,9 +260,13 @@ def _is_repetitive(text: str, threshold: float = 0.7) -> bool:
 
 def _is_filler_chunk(text: str) -> bool:
     """Drop Whisper silence-hallucinations before they enter the buffer."""
+    # Always keep short questions ending with "?" - these are legitimate queries
+    if text.strip().endswith('?'):
+        return False
+
     norm = _normalize_chunk(text)
-    # Always drop very short chunks regardless of blocklist
-    if len(norm) < 15:
+    # Drop very short chunks (15 -> 8 chars) - now shorter questions stay
+    if len(norm) < 8:
         return True
     # Exact-match the whole (normalized) chunk against known filler phrases
     if norm in _FILLER_BLOCKLIST:
@@ -318,10 +328,14 @@ def process_question_async(question: str):
 
     # 1. Extract the actual question from the raw transcript via a fast LLM call.
     #    No system prompt — the grounding instructions would be wrong here.
+    #    Forgiving: even fragmented/error-prone transcripts should yield a
+    #    plausible complete question, not NONE.
     extract_prompt = (
-        "Here is a recent meeting transcript. What question is being asked "
-        "of the presenter? Reply with only the question, or exactly NONE if "
-        "there is no clear question.\n\n"
+        "Here is a recent meeting transcript, which may be fragmented or "
+        "contain transcription errors. Infer the most likely complete question "
+        "being asked of the presenter, even if the transcript is partial. "
+        "Reply with only the inferred question. Reply NONE only if there is no "
+        "discernible topic at all.\n\n"
         f"Transcript:\n{question}"
     )
     try:
@@ -342,6 +356,12 @@ def process_question_async(question: str):
             "message": "No clear question detected in the recent conversation — try speaking your question and pressing again.",
         })
         return
+
+    # 2.5 Clear the transcript buffer now that we've captured a real question,
+    #     so the next hotkey press starts from fresh speech only (not a mix of
+    #     the old + new question, which would make extraction pick the wrong one).
+    if orch_state.transcript_buffer:
+        orch_state.transcript_buffer.clear()
 
     # 3. Retrieve relevant chunks using the EXTRACTED question (not raw buffer)
     retrieve_start = time.time()
@@ -462,9 +482,11 @@ async def lifespan(app: FastAPI):
     )
 
     # 3. Initialize transcriber with our callback
-    # "base.en" model for better accuracy than tiny.en (slower but more reliable)
+    # base.en is the default — fast enough to avoid fragmenting speech into
+    # chunks that break question extraction. Override with WHISPER_MODEL in .env.
+    model = os.getenv("WHISPER_MODEL", "base.en")
     orch_state.transcriber = WhisperTranscriber(
-        model_size="base.en",
+        model_size=model,
         device="cpu",
         compute_type="int8",
         on_transcript=on_transcript
@@ -590,10 +612,34 @@ def emit_error(message: str):
 # ============================================================================
 # Entry point
 # ============================================================================
+def _check_port_available(port: int) -> bool:
+    """Return True if the port is freely bindable, False if already in use."""
+    import socket
+    try:
+        test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        test_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        test_sock.bind(("127.0.0.1", port))
+        test_sock.close()
+        return True
+    except OSError:
+        return False
+
+
 if __name__ == "__main__":
+    port = int(os.getenv("PORT", "8765"))
+
     # Read docs folder from positional arg or env var BEFORE uvicorn starts
     if len(sys.argv) > 1:
         orch_state.docs_folder = sys.argv[1]
     else:
         orch_state.docs_folder = os.getenv("DOCS_FOLDER")
-    uvicorn.run(app, host="127.0.0.1", port=8765)
+
+    if not _check_port_available(port):
+        print(
+            f"[ERROR] Port {port} is already in use - another Meeting Copilot backend "
+            f"may be running. Close it and try again, or set PORT=8766 in .env.",
+            flush=True,
+        )
+        sys.exit(1)
+
+    uvicorn.run(app, host="127.0.0.1", port=port)
