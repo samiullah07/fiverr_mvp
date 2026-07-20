@@ -188,6 +188,17 @@
     const suggestionText = document.getElementById('suggestionText');
     const suggestionContainer = document.getElementById('suggestionContainer');
 
+    // Track whether we're awaiting the first streamed token for the current
+    // request, so we can clear the "Thinking..." placeholder before appending.
+    let awaitingFirstToken = false;
+
+    function clearSuggestionState() {
+      // Remove any prior result styling and reset the suggestion area.
+      suggestionText.parentElement.classList.remove('not-found');
+      suggestionText.parentElement.classList.remove('no-question');
+      suggestionText.innerHTML = '';
+    }
+
     // Listen for incoming WebSocket messages from the preload script
     if (window.electronAPI?.onWsMessage) {
       window.electronAPI.onWsMessage('transcript-update', ({text}) => {
@@ -196,6 +207,11 @@
       });
 
       window.electronAPI.onWsMessage('suggestion-token', ({fragment}) => {
+        // If we were showing "Thinking...", clear it before the first token.
+        if (awaitingFirstToken) {
+          suggestionText.innerHTML = '';
+          awaitingFirstToken = false;
+        }
         // Append token to the suggestion area
         const fragmentNode = document.createTextNode(fragment);
         suggestionText.appendChild(fragmentNode);
@@ -204,7 +220,8 @@
       });
 
       window.electronAPI.onWsMessage('suggestion-done', ({text, citations}) => {
-        // Replace placeholder with final answer
+        // Replace placeholder with final answer (content replaced entirely)
+        awaitingFirstToken = false;
         suggestionText.innerHTML = text;
 
         // Append citations if they exist - deduplicated by filename
@@ -243,24 +260,39 @@
 
       window.electronAPI.onWsMessage('no-relevant-documents', ({query}) => {
         // Show distinct "not in your documents" visual state
+        awaitingFirstToken = false;
         suggestionText.innerHTML = `<strong>Not in your documents</strong>: ${query}`;
+        suggestionText.parentElement.classList.remove('no-question');
         suggestionText.parentElement.classList.add('not-found');
       });
 
       window.electronAPI.onWsMessage('no-question-detected', ({message}) => {
         // Distinct state: we heard speech but found no clear question to answer
+        awaitingFirstToken = false;
         suggestionText.innerHTML = `<strong>No question detected</strong><br>${message}`;
+        suggestionText.parentElement.classList.remove('not-found');
         suggestionText.parentElement.classList.add('no-question');
       });
 
       window.electronAPI.onWsMessage('error', ({message}) => {
         // Simple error display – could be enhanced later
+        awaitingFirstToken = false;
         suggestionText.innerHTML = `<strong>Error:</strong> ${message}`;
         suggestionText.parentElement.classList.remove('not-found');
         suggestionText.parentElement.classList.remove('no-question');
       });
     } else {
       console.warn('[Meeting Copilot] electronAPI.onWsMessage not available');
+    }
+
+    // Hotkey fired (main process) — show immediate "Thinking..." feedback so the
+    // user knows a request is in flight, before any backend response arrives.
+    if (window.electronAPI?.onAssistStart) {
+      window.electronAPI.onAssistStart(() => {
+        clearSuggestionState();
+        suggestionText.textContent = 'Thinking...';
+        awaitingFirstToken = true;
+      });
     }
   </script>
 </body>
